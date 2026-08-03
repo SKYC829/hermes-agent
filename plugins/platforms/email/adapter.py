@@ -613,7 +613,7 @@ class EmailAdapter(BasePlatformAdapter):
 
         self._running = True
         self._poll_task = asyncio.create_task(self._poll_loop())
-        print(f"[Email] Connected as {self._address}")
+        logger.info("[Email] Connected as %s", self._address)
         return True
 
     async def disconnect(self) -> None:
@@ -630,14 +630,18 @@ class EmailAdapter(BasePlatformAdapter):
 
     async def _poll_loop(self) -> None:
         """Poll IMAP for new messages at regular intervals."""
+        logger.info("[Email] Poll loop started (interval=%ds)", self._poll_interval)
         while self._running:
             try:
+                logger.debug("[Email] Polling inbox...")
                 await self._check_inbox()
             except asyncio.CancelledError:
+                logger.info("[Email] Poll loop cancelled")
                 break
             except Exception as e:
                 logger.error("[Email] Poll error: %s", e)
             await asyncio.sleep(self._poll_interval)
+        logger.info("[Email] Poll loop exited (_running=%s)", self._running)
 
     async def _check_inbox(self) -> None:
         """Check INBOX for unseen messages and dispatch them."""
@@ -659,10 +663,14 @@ class EmailAdapter(BasePlatformAdapter):
 
                 status, data = imap.uid("search", None, "UNSEEN")
                 if status != "OK" or not data or not data[0]:
+                    logger.debug("[Email] No UNSEEN messages found")
                     return results
 
-                for uid in data[0].split():
+                uids = data[0].split()
+                logger.debug("[Email] Found %d UNSEEN messages, seen_uids has %d entries", len(uids), len(self._seen_uids))
+                for uid in uids:
                     if uid in self._seen_uids:
+                        logger.debug("[Email] Skipping UID %s (already in _seen_uids)", uid)
                         continue
                     self._seen_uids.add(uid)
                     # Trim periodically to prevent unbounded memory growth
@@ -806,7 +814,13 @@ class EmailAdapter(BasePlatformAdapter):
                 return
         else:
             allowed = {addr.strip().lower() for addr in allowed_raw.split(",") if addr.strip()}
-            if sender_addr.lower() not in allowed:
+            # Support domain matching: "@orientalgames.cn" matches any user@orientalgames.cn
+            sender_domain = sender_addr.split("@")[-1].lower() if "@" in sender_addr else ""
+            is_allowed = (
+                sender_addr.lower() in allowed
+                or f"@{sender_domain}" in allowed
+            )
+            if not is_allowed:
                 logger.debug("[Email] Dropping non-allowlisted sender at dispatch: %s", sender_addr)
                 return
 
