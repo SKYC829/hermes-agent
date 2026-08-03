@@ -40,9 +40,14 @@ def _is_obsidian_file(path: Path) -> bool:
     """检测是否是 Obsidian 文件"""
     if path.suffix != ".md":
         return False
-    # 文件名匹配 Alfred *.md 的也视为 Obsidian 文件
-    if path.name.startswith("Alfred ") and path.name.endswith(".md"):
+    # 在 Obsidian Vault 目录下的 md 文件都视为 Obsidian 文件
+    try:
+        vault = Path("/opt/orientalgames/obsidian-vault")
+        path.resolve().relative_to(vault.resolve())
         return True
+    except ValueError:
+        pass
+    # 兜底：检查内容
     try:
         content = path.read_text(encoding="utf-8")
         return "# Alfred Memory" in content or "- " in content
