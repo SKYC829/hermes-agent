@@ -460,7 +460,7 @@ class MemoryStore:
         # rewrite the file from a stale view, silently discarding whatever an
         # external writer had just added. One read, one snapshot, no window.
         bak = None if skip_drift else self._detect_external_drift(target, raw)
-        fresh = self._parse_entries(raw)
+        fresh = self._parse_entries(raw, path)
         fresh = list(dict.fromkeys(fresh))  # deduplicate
         self._set_entries(target, fresh)
         return bak
@@ -873,13 +873,13 @@ class MemoryStore:
             return "", False
 
     @staticmethod
-    def _parse_entries(raw: str) -> List[str]:
+    def _parse_entries(raw: str, path: Path = None) -> List[str]:
         """Split raw memory-file text into stripped, non-empty entries."""
         if not raw.strip():
             return []
 
         # 检测是否是 Obsidian 文件
-        if _is_obsidian_file(path):
+        if path and _is_obsidian_file(path):
             return _parse_obsidian_entries(raw)
         
         # 非 Obsidian 文件，使用 § 分隔符
@@ -896,7 +896,7 @@ class MemoryStore:
         raw, read_ok = MemoryStore._read_raw_checked(path)
         if not read_ok:
             return [], False
-        return MemoryStore._parse_entries(raw), True
+        return MemoryStore._parse_entries(raw, path), True
 
     def _detect_external_drift(self, target: str, raw: str) -> Optional[str]:
         """Return a backup-path string if on-disk content shows external drift.
