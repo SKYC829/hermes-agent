@@ -33,6 +33,111 @@ from typing import Dict, Any, List, Optional, Tuple
 
 from utils import atomic_write_text
 
+# ========== Obsidian Memory Helpers ==========
+import re as _re
+
+def _is_obsidian_file(path: Path) -> bool:
+    """检测是否是 Obsidian 文件"""
+    if path.suffix != ".md":
+        return False
+    try:
+        content = path.read_text(encoding="utf-8")
+        return "# Alfred Memory" in content or "- " in content
+    except:
+        return False
+
+def _parse_obsidian_entries(content: str) -> list:
+    """解析 Obsidian Markdown 中的 entries（bullet points）"""
+    entries = []
+    current_entry = []
+    
+    for line in content.split("\n"):
+        stripped = line.strip()
+        
+        # 检测 bullet point（- 或 1. 等）
+        if _re.match(r'^[-*]\s+', stripped) or _re.match(r'^\d+\.\s+', stripped):
+            # 保存之前的 entry
+            if current_entry:
+                entries.append("\n".join(current_entry).strip())
+            # 开始新 entry（去掉 bullet 前缀）
+            entry_text = _re.sub(r'^[-*\d]+\.?\s*', '', stripped)
+            current_entry = [entry_text]
+        elif stripped and current_entry:
+            # 继续当前 entry
+            current_entry.append(stripped)
+        elif not stripped and current_entry:
+            # 空行可能分隔 entries
+            entries.append("\n".join(current_entry).strip())
+            current_entry = []
+    
+    # 保存最后一个 entry
+    if current_entry:
+        entries.append("\n".join(current_entry).strip())
+    
+    return [e for e in entries if e]
+
+def _rebuild_obsidian_content(original: str, new_entries: list) -> str:
+    """重建 Obsidian 文件，保持原始结构，替换并添加 entries"""
+    lines = original.split("\n")
+    result = []
+    entry_idx = 0
+    in_entry = False
+    last_entry_line = -1
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        
+        # 检测是否是 entry 行
+        is_entry = _re.match(r'^[-*]\s+', stripped) or _re.match(r'^\d+\.\s+', stripped)
+        
+        # 检测是否是 header
+        is_header = stripped.startswith("#")
+        
+        if is_header:
+            in_entry = False
+            result.append(line)
+        elif is_entry:
+            if entry_idx < len(new_entries):
+                # 替换 entry
+                entry_lines = new_entries[entry_idx].split("\n")
+                bullet_match = _re.match(r'^([-*]\s+|^\d+\.\s+)', stripped)
+                bullet = bullet_match.group(1) if bullet_match else "- "
+                result.append(f"{bullet}{entry_lines[0]}")
+                for e_line in entry_lines[1:]:
+                    result.append(f"  {e_line}")
+                entry_idx += 1
+            else:
+                # 没有更多新 entries，跳过原始 entries
+                pass
+            in_entry = True
+            last_entry_line = len(result) - 1
+        elif not stripped:
+            # 空行
+            in_entry = False
+            result.append(line)
+        else:
+            # 其他行（续行等）
+            if in_entry and entry_idx <= len(new_entries):
+                # 当前 entry 已经被替换，跳过续行
+                pass
+            else:
+                result.append(line)
+            in_entry = False
+    
+    # 添加剩余的新 entries
+    if entry_idx < len(new_entries):
+        # 在最后一个 entry 后面添加
+        for j in range(entry_idx, len(new_entries)):
+            entry_lines = new_entries[j].split("\n")
+            result.append(f"- {entry_lines[0]}")
+            for e_line in entry_lines[1:]:
+                result.append(f"  {e_line}")
+    
+    return "\n".join(result)
+
+# ========== End Obsidian Helpers ==========
+
+
 # fcntl is Unix-only; on Windows use msvcrt for file locking
 msvcrt = None
 try:
@@ -52,7 +157,7 @@ logger = logging.getLogger(__name__)
 # happened after the first import.
 def get_memory_dir() -> Path:
     """Return the profile-scoped memories directory."""
-    return get_hermes_home() / "memories"
+    return Path("/opt/orientalgames/obsidian-vault") / "notes"
 
 # Stable header prefixes for the system-prompt memory blocks rendered by
 # MemoryStore._render_block. Exported so compression's prompt-retention check
@@ -220,8 +325,8 @@ class MemoryStore:
         mem_dir = get_memory_dir()
         mem_dir.mkdir(parents=True, exist_ok=True)
 
-        self.memory_entries = self._read_file(mem_dir / "MEMORY.md")
-        self.user_entries = self._read_file(mem_dir / "USER.md")
+        self.memory_entries = self._read_file(mem_dir / "Alfred Memory.md")
+        self.user_entries = self._read_file(mem_dir / "Alfred User.md")
 
         # Deduplicate entries (preserves order, keeps first occurrence)
         self.memory_entries = list(dict.fromkeys(self.memory_entries))
@@ -316,8 +421,8 @@ class MemoryStore:
     def _path_for(target: str) -> Path:
         mem_dir = get_memory_dir()
         if target == "user":
-            return mem_dir / "USER.md"
-        return mem_dir / "MEMORY.md"
+            return mem_dir / "Alfred User.md"
+        return mem_dir / "Alfred Memory.md"
 
     def _reload_target(self, target: str, *, skip_drift: bool = False):
         """Re-read entries from disk into in-memory state.
@@ -380,11 +485,19 @@ class MemoryStore:
         entries = self._entries_for(target)
         if not entries:
             return 0
+        # Obsidian 文件返回实际内容长度
+        path = self._path_for(target)
+        if _is_obsidian_file(path):
+            return sum(len(e) for e in entries)
         return len(ENTRY_DELIMITER.join(entries))
 
     def _char_limit(self, target: str) -> int:
         if target == "user":
             return self.user_char_limit
+        # Obsidian 文件不做限制
+        path = self._path_for(target)
+        if _is_obsidian_file(path):
+            return 50000000  # 50MB
         return self.memory_char_limit
 
     def add(self, target: str, content: str) -> Dict[str, Any]:
@@ -747,21 +860,10 @@ class MemoryStore:
         return f"{separator}\n{header}\n{separator}\n{content}"
 
     @staticmethod
-    def _read_raw_checked(path: Path) -> Tuple[str, bool]:
-        """Read a memory file's raw text, distinguishing unreadable from empty.
-
-        Returns ``(raw, read_ok)``. ``read_ok`` is False ONLY when the file
-        EXISTS but could not be read — an absent file is a clean ``("", True)``.
-        Invalid UTF-8 counts as unreadable too: the bytes on disk hold content
-        we cannot faithfully round-trip, so a rewrite would corrupt or discard
-        it just like a failed read. Read-modify-write callers must treat
-        ``read_ok=False`` as "abort" rather than "empty store", or a transient
-        read failure would let them persist over — and wipe — the on-disk
-        memory (issue #26045 is about the same class: never rewrite a file
-        from a view that isn't the real one).
-
-        No file locking needed: _write_file uses atomic rename, so readers
-        always see either the previous complete file or the new complete file.
+    def _read_file(path: Path) -> List[str]:
+        """Read a memory file and split into entries.
+        
+        Supports Obsidian Markdown format (bullet points) and §-delimited format.
         """
         if not path.exists():
             return "", True
@@ -775,8 +877,12 @@ class MemoryStore:
         """Split raw memory-file text into stripped, non-empty entries."""
         if not raw.strip():
             return []
-        # Use ENTRY_DELIMITER for consistency with _write_file. Splitting by "§"
-        # alone would incorrectly split entries that contain "§" in their content.
+
+        # 检测是否是 Obsidian 文件
+        if _is_obsidian_file(path):
+            return _parse_obsidian_entries(raw)
+        
+        # 非 Obsidian 文件，使用 § 分隔符
         entries = [e.strip() for e in raw.split(ENTRY_DELIMITER)]
         return [e for e in entries if e]
 
@@ -791,18 +897,6 @@ class MemoryStore:
         if not read_ok:
             return [], False
         return MemoryStore._parse_entries(raw), True
-
-    @staticmethod
-    def _read_file(path: Path) -> List[str]:
-        """Read a memory file and split into entries (empty list on any error).
-
-        Retained for read-only callers (``load_from_disk``) that build in-memory
-        state without persisting; a failed read degrading to ``[]`` there is
-        harmless because nothing is written back. Read-modify-write paths use
-        ``_read_raw_checked`` so they can refuse to overwrite an unreadable
-        file — see ``_reload_target``.
-        """
-        return MemoryStore._read_entries_checked(path)[0]
 
     def _detect_external_drift(self, target: str, raw: str) -> Optional[str]:
         """Return a backup-path string if on-disk content shows external drift.
@@ -869,7 +963,30 @@ class MemoryStore:
         concurrent readers see an empty file. Atomic rename avoids this:
         readers always see either the old complete file or the new one.
         """
-        content = ENTRY_DELIMITER.join(entries) if entries else ""
+        # 对于 Obsidian 文件，保持原始结构
+        if _is_obsidian_file(path):
+            # 读取原始内容
+            existing_content = ""
+            if path.exists():
+                try:
+                    existing_content = path.read_text(encoding="utf-8")
+                except:
+                    pass
+            
+            # 重建内容，保持结构
+            if existing_content and entries:
+                content = _rebuild_obsidian_content(existing_content, entries)
+            elif entries:
+                # 新文件，直接生成
+                content = "# Alfred Memory\n\n"
+                for entry in entries:
+                    content += f"- {entry}\n"
+            else:
+                content = "# Alfred Memory\n\n"
+        else:
+            # 非 Obsidian 文件，使用 § 分隔符
+            content = ENTRY_DELIMITER.join(entries) if entries else ""
+        
         try:
             atomic_write_text(path, content, tmp_prefix=".mem_")
         except (OSError, IOError) as e:
