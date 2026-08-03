@@ -860,10 +860,11 @@ class MemoryStore:
         return f"{separator}\n{header}\n{separator}\n{content}"
 
     @staticmethod
-    def _read_file(path: Path) -> List[str]:
-        """Read a memory file and split into entries.
-        
-        Supports Obsidian Markdown format (bullet points) and §-delimited format.
+    def _read_raw_checked(path: Path) -> Tuple[str, bool]:
+        """Read a memory file's raw text, distinguishing unreadable from empty.
+
+        Returns ``(raw, read_ok)``. ``read_ok`` is False ONLY when the file
+        EXISTS but could not be read — an absent file is a clean ``("", True)``.
         """
         if not path.exists():
             return "", True
@@ -871,6 +872,15 @@ class MemoryStore:
             return path.read_text(encoding="utf-8"), True
         except (OSError, IOError, UnicodeDecodeError):
             return "", False
+
+    @staticmethod
+    def _read_file(path: Path) -> List[str]:
+        """Read a memory file and split into entries.
+        
+        Supports Obsidian Markdown format (bullet points) and §-delimited format.
+        """
+        entries, _ = MemoryStore._read_entries_checked(path)
+        return entries
 
     @staticmethod
     def _parse_entries(raw: str, path: Path = None) -> List[str]:
