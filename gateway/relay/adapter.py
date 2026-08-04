@@ -31,14 +31,6 @@ from gateway.session import SessionSource
 
 logger = logging.getLogger(__name__)
 
-# Keep the drain-path going-idle ACK budget strictly under the runner's default
-# adapter disconnect timeout (5s). If go_idle consumes the whole outer budget,
-# cancellation can fire before transport.disconnect() and leave the websocket
-# open. Paired with transport teardown budgets of 1s each for supervisor,
-# reader, and ws.close (~3s), the full drain path stays inside 5s.
-_RELAY_GO_IDLE_ON_DISCONNECT_TIMEOUT_S = 2.0
-_RELAY_REVOCATION_MONITOR_TEARDOWN_TIMEOUT_S = 1.0
-
 
 def _utf16_len(text: str) -> int:
     """Count UTF-16 code units (Telegram's length unit)."""
@@ -824,11 +816,8 @@ class RelayAdapter(BasePlatformAdapter):
         if self._revocation_monitor is not None:
             self._revocation_monitor.cancel()
             try:
-                await asyncio.wait_for(
-                    self._revocation_monitor,
-                    timeout=_RELAY_REVOCATION_MONITOR_TEARDOWN_TIMEOUT_S,
-                )
-            except (asyncio.TimeoutError, asyncio.CancelledError, Exception):  # noqa: BLE001 - best-effort teardown
+                await self._revocation_monitor
+            except (asyncio.CancelledError, Exception):  # noqa: BLE001 - best-effort teardown
                 pass
             self._revocation_monitor = None
         if self._transport is not None:
@@ -842,32 +831,15 @@ class RelayAdapter(BasePlatformAdapter):
             # the ack (Q-5.3c). Best-effort + guarded: a transport without go_idle
             # (the stub) or a failed/timed-out ack must not block shutdown — we
             # proceed to disconnect exactly as before, no regression.
-            #
-            # transport.disconnect() runs in finally so an outer cancellation
-            # during go_idle (runner default adapter budget is 5s) still closes
-            # the socket/supervisor instead of leaking them. shield() keeps the
-            # teardown await itself from being cancelled mid-flight.
-            try:
-                go_idle = getattr(self._transport, "go_idle", None)
-                if callable(go_idle):
-                    try:
-                        result: Any = go_idle(
-                            timeout_s=_RELAY_GO_IDLE_ON_DISCONNECT_TIMEOUT_S
-                        )
-                        if asyncio.iscoroutine(result):
-                            await result
-                    except Exception:  # noqa: BLE001 - going-idle is an optimization, never blocks drain
-                        logger.debug(
-                            "relay going_idle failed during drain", exc_info=True
-                        )
-            finally:
+            go_idle = getattr(self._transport, "go_idle", None)
+            if callable(go_idle):
                 try:
-                    await asyncio.shield(self._transport.disconnect())
-                except Exception:  # noqa: BLE001 - teardown must not block outer cancel propagation
-                    logger.debug(
-                        "relay transport disconnect failed during drain",
-                        exc_info=True,
-                    )
+                    result: Any = go_idle()
+                    if asyncio.iscoroutine(result):
+                        await result
+                except Exception:  # noqa: BLE001 - going-idle is an optimization, never blocks drain
+                    logger.debug("relay going_idle failed during drain", exc_info=True)
+            await self._transport.disconnect()
 
     async def go_dormant(self) -> bool:
         """Quiesce the relay for a scale-to-zero suspend (D12 / Phase 0).

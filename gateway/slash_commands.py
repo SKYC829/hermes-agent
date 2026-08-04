@@ -4147,14 +4147,7 @@ class GatewaySlashCommandsMixin:
                 # Evict cached agent so next turn rebuilds system prompt
                 # from current files (SOUL.md, memory, etc.).
                 self._evict_cached_agent(session_key)
-                # Off-loop + bounded: temporary-agent teardown can block on
-                # subprocess/network/SQLite work. Running it inline freezes the
-                # gateway loop and stalls platform polling / heartbeat, the same
-                # wedge class fixed for /new (#35994) and hygiene/shutdown
-                # (#53175).
-                await self._cleanup_agent_resources_off_loop(
-                    tmp_agent, context="manual compression"
-                )
+                self._cleanup_agent_resources(tmp_agent)
             lines = [f"🗜️ {summary['headline']}"]
             if focus_topic:
                 lines.append(t("gateway.compress.focus_line", topic=focus_topic))
