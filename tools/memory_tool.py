@@ -334,7 +334,7 @@ class MemoryStore:
         mem_dir.mkdir(parents=True, exist_ok=True)
 
         self.memory_entries = self._read_file(mem_dir / "Alfred Memory.md")
-        self.user_entries = self._read_file(mem_dir / "Alfred User.md")
+        self.user_entries = self._read_file(mem_dir / "Alfred Memory.md")
 
         # Deduplicate entries (preserves order, keeps first occurrence)
         self.memory_entries = list(dict.fromkeys(self.memory_entries))
@@ -429,7 +429,7 @@ class MemoryStore:
     def _path_for(target: str) -> Path:
         mem_dir = get_memory_dir()
         if target == "user":
-            return mem_dir / "Alfred User.md"
+            return mem_dir / "Alfred Memory.md"
         return mem_dir / "Alfred Memory.md"
 
     def _reload_target(self, target: str, *, skip_drift: bool = False):
