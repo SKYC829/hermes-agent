@@ -46,12 +46,6 @@ def _is_obsidian_file(path: Path) -> bool:
         path.resolve().relative_to(vault.resolve())
         return True
     except ValueError:
-        pass
-    # 兜底：检查内容
-    try:
-        content = path.read_text(encoding="utf-8")
-        return "# Alfred Memory" in content or "- " in content
-    except:
         return False
 
 def _parse_obsidian_entries(content: str) -> list:
@@ -90,7 +84,7 @@ def _rebuild_obsidian_content(original: str, new_entries: list) -> str:
     result = []
     entry_idx = 0
     in_entry = False
-    last_entry_line = -1
+    seen_lines = set()  # 全局去重
     
     for i, line in enumerate(lines):
         stripped = line.strip()
@@ -103,7 +97,10 @@ def _rebuild_obsidian_content(original: str, new_entries: list) -> str:
         
         if is_header:
             in_entry = False
-            result.append(line)
+            # 去重：跳过重复的 header
+            if stripped not in seen_lines:
+                seen_lines.add(stripped)
+                result.append(line)
         elif is_entry:
             if entry_idx < len(new_entries):
                 # 替换 entry
@@ -118,7 +115,6 @@ def _rebuild_obsidian_content(original: str, new_entries: list) -> str:
                 # 没有更多新 entries，跳过原始 entries
                 pass
             in_entry = True
-            last_entry_line = len(result) - 1
         elif not stripped:
             # 空行
             in_entry = False
@@ -129,7 +125,10 @@ def _rebuild_obsidian_content(original: str, new_entries: list) -> str:
                 # 当前 entry 已经被替换，跳过续行
                 pass
             else:
-                result.append(line)
+                # 去重：跳过重复的非空行
+                if stripped not in seen_lines:
+                    seen_lines.add(stripped)
+                    result.append(line)
             in_entry = False
     
     # 添加剩余的新 entries
@@ -137,9 +136,15 @@ def _rebuild_obsidian_content(original: str, new_entries: list) -> str:
         # 在最后一个 entry 后面添加
         for j in range(entry_idx, len(new_entries)):
             entry_lines = new_entries[j].split("\n")
-            result.append(f"- {entry_lines[0]}")
+            new_line = f"- {entry_lines[0]}"
+            if new_line not in seen_lines:
+                seen_lines.add(new_line)
+                result.append(new_line)
             for e_line in entry_lines[1:]:
-                result.append(f"  {e_line}")
+                indented = f"  {e_line}"
+                if indented not in seen_lines:
+                    seen_lines.add(indented)
+                    result.append(indented)
     
     return "\n".join(result)
 
@@ -994,6 +999,42 @@ class MemoryStore:
             # 重建内容，保持结构
             if existing_content and entries:
                 content = _rebuild_obsidian_content(existing_content, entries)
+                # 强制去重：防止并发写入导致的重复
+                lines = content.split("\n")
+                seen = set()
+                deduped = []
+                for line in lines:
+                    stripped = line.strip()
+                    if not stripped:
+                        deduped.append(line)
+                        continue
+                    if stripped in seen:
+                        continue
+                    seen.add(stripped)
+                    deduped.append(line)
+                content = "\n".join(deduped)
+                # 强制 ## 最后更新 格式：只保留最后三条，移到末尾
+                lines_after = content.split("\n")
+                last_update_start = None
+                for idx, ln in enumerate(lines_after):
+                    if ln.strip() == "## 最后更新":
+                        last_update_start = idx
+                        break
+                if last_update_start is not None:
+                    before = lines_after[:last_update_start]
+                    after_lines = lines_after[last_update_start + 1:]
+                    # 从 after 中提取时间、摘要、当前状态
+                    kept = []
+                    for ln in after_lines:
+                        s = ln.strip()
+                        if s.startswith("## "):
+                            break
+                        if s.startswith("- **时间**") or s.startswith("- **摘要**") or s.startswith("- **当前状态**"):
+                            kept.append(ln)
+                    if kept:
+                        content = "\n".join(before) + "\n\n## 最后更新\n" + "\n".join(kept) + "\n"
+                    else:
+                        content = "\n".join(before)
             elif entries:
                 # 新文件，直接生成
                 content = "# Alfred Memory\n\n"

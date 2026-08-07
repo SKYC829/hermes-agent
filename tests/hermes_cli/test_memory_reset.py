@@ -21,11 +21,11 @@ def memory_env(tmp_path, monkeypatch):
 
     # Create sample memory files
     (memories / "MEMORY.md").write_text(
-        "§\nHermes repo is at ~/.hermes/hermes-agent\n§\nUser prefers dark themes",
+        "Hermes repo is at ~/.hermes/hermes-agent\nUser prefers dark themes",
         encoding="utf-8",
     )
     (memories / "USER.md").write_text(
-        "§\nUser is Teknium\n§\nTimezone: US Pacific",
+        "User is Teknium\nTimezone: US Pacific",
         encoding="utf-8",
     )
     return hermes_home, memories
