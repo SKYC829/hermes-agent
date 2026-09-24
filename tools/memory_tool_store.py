@@ -17,6 +17,24 @@ from tools.threat_patterns import first_threat_message as _first_threat_message
 
 logger = logging.getLogger("tools.memory_tool")
 
+
+def _is_obsidian(path: Path) -> bool:
+    from tools import memory_tool  # lazy: avoid circular import
+    return memory_tool._is_obsidian_file(path)
+
+
+def _entries_chars(entries: List[str], path: Path) -> int:
+    """Char budget for an entries list at *path*.
+
+    Obsidian files count raw entry chars (bullet markdown has no delimiter
+    overhead); standard files count the ENTRY_DELIMITER-joined form. Mirrors
+    the Alfred Memory semantics (50MB soft cap, see _char_limit).
+    """
+    from tools import memory_tool  # lazy: avoid circular import
+    if memory_tool._is_obsidian_file(path):
+        return sum(len(e) for e in entries)
+    return len(ENTRY_DELIMITER.join(entries))
+
 # Block header prefixes rendered by _render_block; agent/conversation_compression.py
 # matches them to detect a leftover block for an emptied target — keep in lockstep.
 MEMORY_BLOCK_HEADERS = {
@@ -263,7 +281,7 @@ class MemoryStore:
     @staticmethod
     def _path_for(target: str) -> Path:
         from tools import memory_tool  # get_memory_dir is monkeypatched there
-        return memory_tool.get_memory_dir() / ("USER.md" if target == "user" else "MEMORY.md")
+        return memory_tool.get_memory_dir() / ("USER.md" if target == "user" else "Alfred Memory.md")
 
     def _entries_for(self, target: str) -> List[str]:
         return self.user_entries if target == "user" else self.memory_entries
@@ -272,10 +290,14 @@ class MemoryStore:
         setattr(self, "user_entries" if target == "user" else "memory_entries", entries)
 
     def _char_count(self, target: str) -> int:
-        return len(ENTRY_DELIMITER.join(self._entries_for(target)))
+        return _entries_chars(self._entries_for(target), self._path_for(target))
 
     def _char_limit(self, target: str) -> int:
-        return self.user_char_limit if target == "user" else self.memory_char_limit
+        if target == "user":
+            return self.user_char_limit
+        if _is_obsidian(self._path_for(target)):
+            return 50000000  # 50MB soft limit for Obsidian files
+        return self.memory_char_limit
 
     def _usage(self, target: str) -> str:
         return f"{self._char_count(target):,}/{self._char_limit(target):,}"
@@ -342,8 +364,8 @@ class MemoryStore:
         def _add(entries, limit):
             if content in entries:
                 return self._success_response(target, "Entry already exists (no duplicate added).")
-            if len(ENTRY_DELIMITER.join(entries + [content])) > limit:
-                new_total = len(ENTRY_DELIMITER.join(entries + [content]))
+            new_total = _entries_chars(entries + [content], self._path_for(target))
+            if new_total > limit:
                 return self._failure_with_entries(target, (
                     f"Memory at {self._char_count(target):,}/{limit:,} chars; adding this entry ({len(content)} chars) "
                     f"would exceed the limit by {new_total - limit:,} chars. Retry as ONE 'operations' batch that "
@@ -409,7 +431,7 @@ class MemoryStore:
             replaced = entries[:idx] + ([] if new_content is None else [new_content]) + entries[idx + 1:]
             if new_content is None:
                 return replaced, "Entry removed.", {"removed_entry": entries[idx]}
-            new_total = len(ENTRY_DELIMITER.join(replaced))
+            new_total = _entries_chars(replaced, self._path_for(target))
             if new_total > limit:
                 return self._failure_with_entries(target, (
                     f"Replacement {_over_limit(new_total, limit)}. Shorten the new content, or retry as ONE "
@@ -501,7 +523,7 @@ class MemoryStore:
                     f"previously non-empty store. Keep at least one entry — merge overlapping "
                     f"entries into a shorter one instead of removing the last one. To delete the "
                     f"final entry deliberately, use single remove() calls."), "would_empty")
-            new_total = len(ENTRY_DELIMITER.join(working))  # budget check against the FINAL state only
+            new_total = _entries_chars(working, self._path_for(target))  # budget check against the FINAL state only
             if new_total > limit:
                 return self._batch_failure(target, (
                     f"Applying all {len(operations)} operations {_over_limit(new_total, limit)} more. Add "
@@ -569,8 +591,57 @@ class MemoryStore:
 
     @staticmethod
     def _parse_entries(raw: str) -> List[str]:
-        """Stripped, non-empty entries; splits on the FULL delimiter so a bare "§" survives."""
-        return [e for e in (x.strip() for x in raw.split(ENTRY_DELIMITER)) if e]
+        """Stripped, non-empty entries.
+
+        Supports both §-delimited format and Obsidian Markdown format.
+        Standard format splits on the FULL delimiter so a bare "§" survives.
+        """
+        if not raw.strip():
+            return []
+
+        # FORMAT CLEANUP before parsing (fix corrupted - - bullets and stray §)
+        cleaned_lines = []
+        for line in raw.split("\n"):
+            stripped = line.strip()
+            if stripped == "§":
+                continue
+            if stripped.startswith("§"):
+                line = line.replace("§", "", 1)
+                stripped = line.strip()
+            if re.match(r'^\s*- - ', line):
+                line = re.sub(r'^(\s*)- - ', r'\1- ', line)
+            cleaned_lines.append(line)
+        raw = "\n".join(cleaned_lines)
+
+        # Detect Obsidian format: has headers (##) and bullet points (- **)
+        lines = raw.split("\n")
+        has_headers = any(line.strip().startswith("## ") for line in lines)
+        has_bullets = any(line.strip().startswith("- **") for line in lines)
+
+        if has_headers and has_bullets:
+            # Obsidian format: parse by headers and bullet points
+            entries: List[str] = []
+            current_entry: List[str] = []
+            for line in lines:
+                stripped = line.strip()
+                if stripped.startswith("## "):
+                    if current_entry:
+                        entries.append("\n".join(current_entry))
+                        current_entry = []
+                    current_entry.append(line)
+                elif stripped.startswith("- **"):
+                    if current_entry:
+                        entries.append("\n".join(current_entry))
+                    current_entry = [line]
+                elif stripped and current_entry:
+                    current_entry.append(line)
+            if current_entry:
+                entries.append("\n".join(current_entry))
+            return [e.strip() for e in entries if e.strip()]
+
+        # Standard §-delimited format (FULL delimiter split, bare "§" survives)
+        entries = [e.strip() for e in raw.split(ENTRY_DELIMITER)]
+        return [e for e in entries if e]
 
     @staticmethod
     def _read_file(path: Path) -> List[str]:
@@ -582,9 +653,61 @@ class MemoryStore:
     def _write_file(path: Path, entries: List[str]):
         """Atomic temp-file + rename: readers never see a truncated file. Callers
         hold ``_file_lock`` (via ``_mutate``): a bare write from an earlier snapshot
-        drops concurrent entries (#119668)."""
+        drops concurrent entries (#119668). Also used by agent/learning_mutations.py.
+
+        Supports both §-delimited format and Obsidian Markdown format.
+        """
+        from tools import memory_tool  # lazy: avoid circular import
+        if memory_tool._is_obsidian_file(path):
+            existing_content = ""
+            if path.exists():
+                try:
+                    existing_content = path.read_text(encoding="utf-8")
+                except OSError:
+                    pass
+
+            if existing_content and entries:
+                content = memory_tool._rebuild_obsidian_content(existing_content, entries)
+                # Defense-in-depth: force dedup + format cleanup after rebuild
+                lines = content.split("\n")
+                seen = set()
+                deduped: List[str] = []
+                in_last_update = False
+                for line in lines:
+                    stripped = line.strip()
+                    if not stripped:
+                        deduped.append(line)
+                        continue
+                    # Track ## 最后更新 section (entries there skip dedup)
+                    if stripped == "## 最后更新":
+                        in_last_update = True
+                    elif stripped.startswith("## ") and in_last_update:
+                        in_last_update = False
+                    # Format cleanup: fix - - bullets and stray §
+                    if stripped.startswith("§"):
+                        line = line.replace("§", "", 1)
+                        stripped = line.strip()
+                    if re.match(r'^\s*- - ', line):
+                        line = re.sub(r'^(\s*)- - ', r'\1- ', line)
+                        stripped = line.strip()
+                    if in_last_update:
+                        deduped.append(line)
+                        continue
+                    if stripped in seen:
+                        continue
+                    seen.add(stripped)
+                    deduped.append(line)
+                content = "\n".join(deduped)
+            elif entries:
+                content = "# Alfred Memory\n\n"
+                for entry in entries:
+                    content += f"- {entry}\n"
+            else:
+                content = "# Alfred Memory\n\n"
+        else:
+            content = ENTRY_DELIMITER.join(entries) if entries else ""
         try:
-            atomic_write_text(path, ENTRY_DELIMITER.join(entries), tmp_prefix=".mem_")
+            atomic_write_text(path, content, tmp_prefix=".mem_")
         except OSError as e:
             raise RuntimeError(f"Failed to write memory file {path}: {e}")
 
@@ -595,6 +718,11 @@ class MemoryStore:
         it. Layout differences (blank lines around ``§``, empty entries, padding) are NOT
         drift: parsing only strips whitespace, so the flush loses nothing but whitespace, and
         refusing there blocked every replace/remove on a hand-formatted file for good (#107270)."""
+        # Obsidian files rebuild content on write — round-trip drift detection
+        # does not apply (the tool legitimately rewrites structure).
+        from tools import memory_tool  # lazy: avoid circular import
+        if memory_tool._is_obsidian_file(self._path_for(target)):
+            return None
         if max(map(len, self._parse_entries(raw)), default=0) <= self._char_limit(target):
             return None
         path = self._path_for(target)
