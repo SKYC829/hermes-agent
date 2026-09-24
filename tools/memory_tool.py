@@ -37,11 +37,174 @@ _memory_surface_flags: ContextVar[Optional[Tuple[bool, bool]]] = ContextVar("mem
 
 def get_memory_dir() -> Path:
     """Profile-scoped memories dir, resolved per call (HERMES_HOME may switch after import)."""
-    return get_hermes_home() / "memories"
+    return Path("/opt/orientalgames/obsidian-vault") / "alfred"
 
 
 from tools.memory_tool_store import (  # noqa: E402,F401  (re-exports)
     ENTRY_DELIMITER, MEMORY_BLOCK_HEADERS, MemoryStore, _scan_memory_content)
+
+# ========== Obsidian Memory Helpers ==========
+import re as _re
+
+def _is_obsidian_file(path: Path) -> bool:
+    """Detect if file is Obsidian format.
+    
+    Path-based check ONLY — no content reading.
+    Content-reading fallback was removed because it caused extra IO
+    in _write_file (which calls this, then reads again for rebuild).
+    """
+    if path.suffix != ".md":
+        return False
+    try:
+        vault = Path("/opt/orientalgames/obsidian-vault")
+        path.resolve().relative_to(vault.resolve())
+        return True
+    except ValueError:
+        return False
+
+def _parse_obsidian_entries(content: str) -> list:
+    """Parse entries from Obsidian Markdown (bullet points)"""
+    entries = []
+    current_entry = []
+    
+    for line in content.split("\n"):
+        stripped = line.strip()
+        
+        if _re.match(r'^[-*]\s+', stripped) or _re.match(r'^\d+\.\s+', stripped):
+            if current_entry:
+                entries.append("\n".join(current_entry).strip())
+            entry_text = _re.sub(r'^[-*\d]+\.?\s*', '', stripped)
+            current_entry = [entry_text]
+        elif stripped and current_entry:
+            current_entry.append(stripped)
+        elif not stripped and current_entry:
+            entries.append("\n".join(current_entry).strip())
+            current_entry = []
+    
+    if current_entry:
+        entries.append("\n".join(current_entry).strip())
+    
+    return [e for e in entries if e]
+
+def _rebuild_obsidian_content(original: str, new_entries: list) -> str:
+    """Rebuild Obsidian file preserving structure, replacing entries.
+    
+    CRITICAL: Uses seen_lines for GLOBAL dedup of ALL lines (headers,
+    entries, continuation lines). Without this, repeated writes cause
+    the file to grow indefinitely with duplicate content.
+    """
+    # FORMAT CLEANUP: fix corrupted formats before processing
+    # Clean original file content
+    cleaned_lines = []
+    for line in original.split("\n"):
+        stripped = line.strip()
+        # Remove §-only delimiter lines
+        if stripped == "§":
+            continue
+        # Remove leading § prefix (from old §-delimited format)
+        if stripped.startswith("§"):
+            line = line.replace("§", "", 1)
+            stripped = line.strip()
+        # Fix "- - " double-dash entries to "- "
+        if _re.match(r'^\s*- - ', line):
+            line = _re.sub(r'^(\s*)- - ', r'\1- ', line)
+        cleaned_lines.append(line)
+    lines = cleaned_lines
+    
+    # Clean entries too (they may contain - - or § from parsed file)
+    cleaned_entries = []
+    for entry in new_entries:
+        entry_lines = entry.split("\n")
+        cleaned_entry_lines = []
+        for eline in entry_lines:
+            # Fix "- - " in entry text
+            if _re.match(r'^\s*- - ', eline):
+                eline = _re.sub(r'^(\s*)- - ', r'\1- ', eline)
+            # Remove leading § prefix
+            if eline.strip().startswith("§"):
+                eline = eline.replace("§", "", 1)
+            cleaned_entry_lines.append(eline)
+        cleaned_entries.append("\n".join(cleaned_entry_lines))
+    new_entries = cleaned_entries
+    result = []
+    entry_idx = 0
+    in_entry = False
+    seen_lines = set()  # Global dedup — prevents file bloat
+    in_last_update = False
+    
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        is_entry = _re.match(r'^[-*]\s+', stripped) or _re.match(r'^\d+\.\s+', stripped)
+        is_header = stripped.startswith("## ") and not is_entry
+        
+        # Track if we're in ## 最后更新 section
+        if is_header and stripped == "## 最后更新":
+            in_last_update = True
+        elif is_header and in_last_update:
+            in_last_update = False
+        
+        if is_header:
+            in_entry = False
+            if stripped not in seen_lines:
+                seen_lines.add(stripped)
+                result.append(line)
+        elif is_entry and not in_last_update:
+            if entry_idx < len(new_entries):
+                entry_lines = new_entries[entry_idx].split("\n")
+                bullet_match = _re.match(r'^([-*]\s+|^\d+\.\s+)', stripped)
+                bullet = bullet_match.group(1) if bullet_match else "- "
+                new_line = f"{bullet}{entry_lines[0]}"
+                if new_line not in seen_lines:
+                    seen_lines.add(new_line)
+                    result.append(new_line)
+                for e_line in entry_lines[1:]:
+                    indented = f"  {e_line}"
+                    if indented not in seen_lines:
+                        seen_lines.add(indented)
+                        result.append(indented)
+                entry_idx += 1
+            in_entry = True
+        elif is_entry and in_last_update:
+            # Preserve entries in ## 最后更新 section as-is (skip dedup)
+            result.append(line)
+        elif not stripped:
+            in_entry = False
+            result.append(line)
+        else:
+            if in_entry and entry_idx <= len(new_entries):
+                pass  # Skip continuation of replaced entry
+            else:
+                if stripped not in seen_lines:
+                    seen_lines.add(stripped)
+                    result.append(line)
+            in_entry = False
+    
+    # Add remaining new entries BEFORE ## 最后更新
+    if entry_idx < len(new_entries):
+        insert_pos = len(result)
+        for idx, ln in enumerate(result):
+            if ln.strip() == "## 最后更新":
+                insert_pos = idx
+                break
+        
+        new_lines = []
+        for j in range(entry_idx, len(new_entries)):
+            entry_lines = new_entries[j].split("\n")
+            new_line = f"- {entry_lines[0]}"
+            if new_line not in seen_lines:
+                seen_lines.add(new_line)
+                new_lines.append(new_line)
+            for e_line in entry_lines[1:]:
+                indented = f"  {e_line}"
+                if indented not in seen_lines:
+                    seen_lines.add(indented)
+                    new_lines.append(indented)
+        
+        result = result[:insert_pos] + new_lines + result[insert_pos:]
+    
+    return "\n".join(result)
+# ========== End Obsidian Helpers ==========
+
 
 
 def load_on_disk_store() -> "MemoryStore":
@@ -249,8 +412,12 @@ def _memory_target_error(store: "MemoryStore", target: str) -> Optional[Dict[str
                 "error": _bound_error_text(f"Invalid memory target '{target}'. Use 'memory' or 'user'.")}
     if store.target_enabled(target):
         return None
-    label = "USER.md" if target == "user" else "MEMORY.md"
-    return {"success": False, "error": f"Built-in {label} writes are disabled in memory config.", "target": target}
+    label = "USER.md" if target == "user" else "Alfred Memory.md"
+    return {
+        "success": False,
+        "error": f"Built-in {label} writes are disabled in memory config.",
+        "target": target,
+    }
 
 
 def apply_memory_pending(payload: Dict[str, Any], store: "MemoryStore") -> Dict[str, Any]:
