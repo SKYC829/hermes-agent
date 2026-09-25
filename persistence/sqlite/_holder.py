@@ -240,7 +240,12 @@ class StoreHolder:
     # optimize); attempt-counted budgets destroyed turns on a healthy store. Transcript
     # writes (failure aborts the turn) get the long budget; observation-only activity
     # writes sit on the response-critical path and get a sub-second one.
-    _WRITE_PATIENCE_S, _TRANSCRIPT_WRITE_PATIENCE_S, _ACTIVITY_WRITE_PATIENCE_S = 20.0, 60.0, 0.5
+    # Transcript patience raised 60->300s (Alfred fork): under backup-window I/O starvation a
+    # convoy of sibling writers (tui_gateway + cron external workers) held the state.db write
+    # lock continuously for >=186s and >=150s (2026-09-25/26 convoys), aborting turns
+    # ("session storage was busy", cause=locked) and dropping cron shifts. 300s covers the
+    # observed convoys with margin; a genuinely wedged holder still fails closed, just later.
+    _WRITE_PATIENCE_S, _TRANSCRIPT_WRITE_PATIENCE_S, _ACTIVITY_WRITE_PATIENCE_S = 20.0, 300.0, 0.5
     # A live compression lock gets a short wait (compression publishes in seconds), but the lease
     # is a correctness boundary: a writer still locked out afterwards is refused.
     # Observation-only activity heartbeat/label writes (#76354 review S1): these run on (or adjacent to) the
