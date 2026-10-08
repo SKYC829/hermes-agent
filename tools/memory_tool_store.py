@@ -599,26 +599,31 @@ class MemoryStore:
         if not raw.strip():
             return []
 
-        # FORMAT CLEANUP before parsing (fix corrupted - - bullets and stray §)
+        # Detect Obsidian format FIRST (cleanup semantics differ per format):
+        # headers (##) and bullet points (- **)
+        lines = raw.split("\n")
+        has_headers = any(line.strip().startswith("## ") for line in lines)
+        has_bullets = any(line.strip().startswith("- **") for line in lines)
+        is_obsidian = has_headers and has_bullets
+
+        # FORMAT CLEANUP before parsing (fix corrupted - - bullets and stray §).
+        # A bare "§" line is corruption in Obsidian files but the ENTRY_DELIMITER
+        # itself in §-delimited format, so it is only stripped in the Obsidian branch.
         cleaned_lines = []
         for line in raw.split("\n"):
             stripped = line.strip()
-            if stripped == "§":
+            if is_obsidian and stripped == "§":
                 continue
-            if stripped.startswith("§"):
+            if stripped.startswith("§") and stripped != "§":
                 line = line.replace("§", "", 1)
                 stripped = line.strip()
             if re.match(r'^\s*- - ', line):
                 line = re.sub(r'^(\s*)- - ', r'\1- ', line)
             cleaned_lines.append(line)
         raw = "\n".join(cleaned_lines)
-
-        # Detect Obsidian format: has headers (##) and bullet points (- **)
         lines = raw.split("\n")
-        has_headers = any(line.strip().startswith("## ") for line in lines)
-        has_bullets = any(line.strip().startswith("- **") for line in lines)
 
-        if has_headers and has_bullets:
+        if is_obsidian:
             # Obsidian format: parse by headers and bullet points
             entries: List[str] = []
             current_entry: List[str] = []
