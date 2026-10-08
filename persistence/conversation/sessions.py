@@ -130,6 +130,33 @@ BOUNDARY_END_REASONS: frozenset[str] = frozenset(
 #: Sources every human session picker leaves out (workers, tool integrations, one-shot runs).
 INTERNAL_LISTING_SOURCES = ("kanban", "tool", "oneshot")
 
+#: Sources the user starts themselves: interactive shells and IDE integrations.
+USER_INITIATED_SOURCES = ("cli", "tui", "acp")
+#: Scheduled background jobs.
+CRON_SOURCES = ("cron",)
+
+
+def listing_exclude_sources(
+    all_sources, *, include_message_platform: bool = False,
+    include_cron: bool = False,
+) -> list[str]:
+    """Build the ``exclude_sources`` deny-list for session listings.
+
+    Default view shows only what the user initiated (``USER_INITIATED_SOURCES``):
+    message-platform conversations and cron-job sessions are hidden unless their
+    flag lifts them back in. A source that is neither user-initiated, nor cron,
+    nor internal is a message platform by inference — new platforms (a QQ bot,
+    a WeChat bridge, ...) stay hidden automatically without touching this code.
+    """
+    known = set(USER_INITIATED_SOURCES) | set(CRON_SOURCES) | set(INTERNAL_LISTING_SOURCES)
+    message_platform = {str(s) for s in all_sources if str(s) not in known}
+    exclude: set[str] = set(INTERNAL_LISTING_SOURCES)
+    if not include_cron:
+        exclude |= set(CRON_SOURCES)
+    if not include_message_platform:
+        exclude |= message_platform
+    return sorted(exclude)
+
 #: Maximum sanitized title length; a longer title is a ``ValueError``.
 MAX_TITLE_LENGTH = 100
 
