@@ -267,8 +267,20 @@ def _cmd_list(db, args):
     # LIMIT lives in the query, so probe one row past the cap: it is the only way to know the
     # page was cut without a second COUNT query (``--limit 0`` is ``LIMIT 0``: no rows, no probe).
     limit = args.limit
+    if getattr(args, "source", None):
+        exclude = _default_exclude(args)
+    else:
+        # Default view = only user-initiated sessions (cli/tui/acp); message-platform and
+        # cron sessions come back only behind their --include-* flags. Sources observed in the
+        # store classify by inference, so new platforms are hidden without touching this code.
+        from hermes_state_sessions import listing_exclude_sources
+        exclude = listing_exclude_sources(
+            db.session_count_by_source().keys(),
+            include_message_platform=getattr(args, "include_message_platform", False),
+            include_cron=getattr(args, "include_cron", False),
+        )
     sessions = db.list_sessions_rich(
-        source=args.source, exclude_sources=_default_exclude(args), limit=limit + 1 if limit > 0 else limit,
+        source=args.source, exclude_sources=exclude, limit=limit + 1 if limit > 0 else limit,
     )
     truncated = limit > 0 and len(sessions) > limit
     sessions = sessions[:limit] if truncated else sessions

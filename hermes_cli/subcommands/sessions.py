@@ -22,6 +22,10 @@ def build_sessions_parser(subparsers, *, cmd_sessions: Callable) -> None:
     sessions_list = sessions_subparsers.add_parser("list", help="List recent sessions")
     sessions_list.add_argument("--source", help="Filter by source (cli, telegram, discord, etc.)")
     sessions_list.add_argument("--limit", type=int, default=20, help="Max sessions to show")
+    sessions_list.add_argument("--include-message-platform", action="store_true",
+                               help="Also show message-platform conversations (telegram, QQ_Bot, WeChatBot, ...)")
+    sessions_list.add_argument("--include-cron", action="store_true",
+                               help="Also show scheduled cron-job sessions")
     sessions_list.add_argument("--workspace", metavar="NEEDLE",
         help="Only sessions in one workspace: a git repo root or project dir "
         "(matched by path substring or basename).")

@@ -9,7 +9,7 @@ import re
 import sqlite3
 import time
 from pathlib import Path
-from typing import Any, Callable, Dict, List, Optional, Sequence, Tuple, Union
+from typing import Any, Callable, Dict, Iterable, List, Optional, Sequence, Tuple, Union
 
 from agent.session_activity import (
     ActivityProvenance, bound_activity_description, normalize_activity_provenance,
@@ -234,6 +234,33 @@ def _delete_delegate_children(conn, parent_ids: List[str]) -> List[str]:
 # runs): every human picker — TUI/Desktop session lists, ``/sessions`` in the CLI, ``sessions list`` in the
 # console — excludes them. A deny-list, so new interactive platforms surface automatically.
 INTERNAL_LISTING_SOURCES = ("kanban", "tool", "oneshot")
+
+# Sources the user starts themselves: interactive shells and IDE integrations.
+USER_INITIATED_SOURCES = ("cli", "tui", "acp")
+# Scheduled background jobs.
+CRON_SOURCES = ("cron",)
+
+
+def listing_exclude_sources(
+    all_sources: Iterable[str], *, include_message_platform: bool = False,
+    include_cron: bool = False,
+) -> list[str]:
+    """Build the ``exclude_sources`` deny-list for session listings.
+
+    Default view shows only what the user initiated (``USER_INITIATED_SOURCES``):
+    message-platform conversations and cron-job sessions are hidden unless their
+    flag lifts them back in. A source that is neither user-initiated, nor cron,
+    nor internal is a message platform by inference — new platforms (a QQ bot,
+    a WeChat bridge, ...) stay hidden automatically without touching this code.
+    """
+    known = set(USER_INITIATED_SOURCES) | set(CRON_SOURCES) | set(INTERNAL_LISTING_SOURCES)
+    message_platform = {str(s) for s in all_sources if str(s) not in known}
+    exclude: set[str] = set(INTERNAL_LISTING_SOURCES)
+    if not include_cron:
+        exclude |= set(CRON_SOURCES)
+    if not include_message_platform:
+        exclude |= message_platform
+    return sorted(exclude)
 
 SESSION_STATUS_COMPLETE = "complete"
 SESSION_STATUS_INTERRUPTED = "interrupted"

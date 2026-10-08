@@ -306,12 +306,13 @@ class CLISessionMixin:
             return []
         try:
             from hermes_cli.session_listing import query_session_listing
-            from hermes_state_sessions import INTERNAL_LISTING_SOURCES
+            from hermes_state_sessions import listing_exclude_sources
 
             return query_session_listing(
-                self._session_db, source="cli", current_session_id=self.session_id,
-                include_all_sources=False, include_unnamed=True, limit=limit,
-                exclude_sources=list(INTERNAL_LISTING_SOURCES))
+                self._session_db, source=None, current_session_id=self.session_id,
+                include_all_sources=True, include_unnamed=True, limit=limit,
+                exclude_sources=listing_exclude_sources(
+                    self._session_db.session_count_by_source().keys()))
         except Exception:
             return []
 
