@@ -484,6 +484,23 @@ def _composer_paste_roots() -> list[Path]:
     return [hermes_dir / COMPOSER_PASTES_DIRNAME for hermes_dir in _hermes_dirs()]
 
 
+def _config_allowed_roots() -> list[Path]:
+    """Extra roots the workspace guard admits, from ``context_references.allowed_roots``.
+
+    The guard's default stays the session workspace; listing roots here (e.g. ``/`` for
+    a single-user machine) widens it explicitly. Unreadable/absent config widens nothing.
+    """
+    try:
+        from hermes_cli.config import load_config_readonly
+        roots = (load_config_readonly() or {}).get("context_references", {}).get("allowed_roots") or []
+        return [
+            Path(os.path.expanduser(str(entry).strip())).resolve()
+            for entry in roots if isinstance(entry, str) and entry.strip()
+        ]
+    except Exception:
+        return []
+
+
 def _agent_staged_path(path: Path) -> bool:
     """True when *path* sits in a Hermes dir the gateway stages for the agent.
 
@@ -514,6 +531,7 @@ def _resolve_path(cwd: Path, target: str, *, allowed_root: Path | None = None) -
         allowed_root is not None
         and not _is_under(resolved, allowed_root)
         and not any(_is_under(resolved, root) for root in _composer_paste_roots())
+        and not any(_is_under(resolved, root) for root in _config_allowed_roots())
         and not _agent_staged_path(resolved)
     ):
         raise ValueError("path is outside the allowed workspace")
