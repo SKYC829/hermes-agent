@@ -30,7 +30,7 @@ from agent.memory_manager import StreamingContextScrubber
 from agent.memory_provider import is_core_memory_provider
 from agent.session_activity import ActivityProvenance
 from agent.model_metadata import (
-    MINIMUM_CONTEXT_LENGTH, fetch_model_metadata, is_local_endpoint, query_ollama_num_ctx
+    get_minimum_context_length, fetch_model_metadata, is_local_endpoint, query_ollama_num_ctx
 )
 from agent.process_bootstrap import _install_safe_stdio
 from agent.subdirectory_hints import SubdirectoryHintTracker
@@ -44,6 +44,7 @@ from hermes_cli.timeouts import get_provider_request_timeout
 from hermes_constants import get_hermes_home
 from hermes_state_ids import new_session_id
 from utils import base_url_host_matches, is_truthy_value
+from agent.model_metadata import get_minimum_context_length
 
 # Same logger name as run_agent so caplog/patches on "run_agent" see our records.
 logger = logging.getLogger("run_agent")
@@ -2054,15 +2055,15 @@ def _enforce_minimum_context(agent):
         and not isinstance(agent._config_context_length, bool)
         and agent._config_context_length > 0
     )
-    if _ctx and _ctx < MINIMUM_CONTEXT_LENGTH and not _allow_lmstudio_explicit_below_floor:
-        floor_k = MINIMUM_CONTEXT_LENGTH // 1000
+    if _ctx and _ctx < get_minimum_context_length() and not _allow_lmstudio_explicit_below_floor:
+        floor_k = get_minimum_context_length() // 1000
         if agent.base_url and is_local_endpoint(agent.base_url):
             # Any OpenAI-compatible local server (llama.cpp, vLLM, Ollama, ...) — the window is the
             # server's runtime setting, not the model's; never assume Ollama here (#87075).
             remedy = (
                 f"Your local server is serving a {_ctx:,}-token window.  Start it with at least "
-                f"{floor_k}K context (llama.cpp: -c {MINIMUM_CONTEXT_LENGTH}; vLLM: --max-model-len; "
-                f"Ollama: OLLAMA_CONTEXT_LENGTH={MINIMUM_CONTEXT_LENGTH} or a Modelfile num_ctx), "
+                f"{floor_k}K context (llama.cpp: -c {get_minimum_context_length()}; vLLM: --max-model-len; "
+                f"Ollama: OLLAMA_CONTEXT_LENGTH={get_minimum_context_length()} or a Modelfile num_ctx), "
                 f"or set model.ollama_num_ctx in config.yaml to the window it really serves "
                 f"(at least {floor_k}K)."
             )
@@ -2075,7 +2076,7 @@ def _enforce_minimum_context(agent):
             )
         raise ValueError(
             f"Model {agent.model} has a context window of {_ctx:,} tokens, "
-            f"which is below the minimum {MINIMUM_CONTEXT_LENGTH:,} required "
+            f"which is below the minimum {get_minimum_context_length():,} required "
             f"by Hermes Agent.  {remedy}"
         )
 

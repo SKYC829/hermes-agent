@@ -2803,11 +2803,12 @@ def _new_session_key() -> str:
 
 
 # Server-minted session keys are ``%Y%m%d_%H%M%S_`` + 6 hex chars (see
-# ``_new_session_key``). session.resume uses this shape as the fail-closed gate
-# for materializing a row for a minted-but-never-persisted key: only keys the
-# server itself could have produced qualify — arbitrary strings and 8-hex
-# runtime session ids (``uuid4().hex[:8]``) are rejected.
-_MINTED_SESSION_KEY_RE = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{6}$")
+# ``_new_session_key``), optionally suffixed ``-<profile_name>`` when minted inside
+# a named profile (``hermes_state_ids.new_session_id``). session.resume uses this
+# shape as the fail-closed gate for materializing a row for a minted-but-never-
+# persisted key: only keys the server itself could have produced qualify —
+# arbitrary strings and 8-hex runtime session ids (``uuid4().hex[:8]``) are rejected.
+_MINTED_SESSION_KEY_RE = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{6}(?:-[a-z0-9][a-z0-9_-]{0,63})?$")
 
 
 def _is_server_minted_key(value: str | None) -> bool:

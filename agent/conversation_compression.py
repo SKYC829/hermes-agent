@@ -2052,7 +2052,7 @@ def check_compression_model_feasibility(agent: Any) -> None:
             _resolve_task_provider_model, _try_configured_fallback_for_unavailable_client,
             get_text_auxiliary_client,
         )
-        from agent.model_metadata import MINIMUM_CONTEXT_LENGTH, get_model_context_length
+        from agent.model_metadata import get_minimum_context_length, get_model_context_length
         # Provider may be "auto"; fall back to the client's base_url hostname so the
         # user can tell where the compression model is actually called.
         try:
@@ -2104,14 +2104,14 @@ def check_compression_model_feasibility(agent: Any) -> None:
                 aux_model, base_url=aux_base_url, api_key=aux_api_key, config_context_length=_aux_cfg_ctx,
                 provider=_aux_provider, custom_providers=agent._custom_providers,
             )
-        # Aux model must meet MINIMUM_CONTEXT_LENGTH like the main model, else it cannot summarise a full window.
-        if aux_context and aux_context < MINIMUM_CONTEXT_LENGTH:
+        # Aux model must meet get_minimum_context_length() like the main model, else it cannot summarise a full window.
+        if aux_context and aux_context < get_minimum_context_length():
             raise ValueError(
                 f"Auxiliary compression model {aux_model} has a context "
                 f"window of {aux_context:,} tokens, which is below the "
-                f"minimum {MINIMUM_CONTEXT_LENGTH:,} required by Hermes "
+                f"minimum {get_minimum_context_length():,} required by Hermes "
                 f"Agent.  Choose a compression model with at least "
-                f"{MINIMUM_CONTEXT_LENGTH // 1000}K context (set "
+                f"{get_minimum_context_length() // 1000}K context (set "
                 f"auxiliary.compression.model in config.yaml), or set "
                 f"auxiliary.compression.context_length to override the "
                 f"detected value if it is wrong."
@@ -2150,15 +2150,15 @@ def revalidate_compression_feasibility(agent: Any) -> None:
 
 
 def ensure_compression_feasibility_checked(agent: Any, estimated_tokens: int) -> None:
-    """Run the deferred aux feasibility probe once a request first reaches ``MINIMUM_CONTEXT_LENGTH`` — the
+    """Run the deferred aux feasibility probe once a request first reaches ``get_minimum_context_length()`` — the
     smallest window any summariser may have — so an aux clamp lands before the first compaction fires on the
     main-window threshold instead of after it (#114707). Below that size no summariser can be too small, so
     short sessions keep the probe-free cold start (#28957). A probe failure leaves the latch unset for the
     lazy probe in ``compress_context`` to re-raise hard rejections."""
     if getattr(agent, "_compression_feasibility_checked", False) or not getattr(agent, "context_compressor", None):
         return
-    from agent.model_metadata import MINIMUM_CONTEXT_LENGTH
-    if int(estimated_tokens or 0) < MINIMUM_CONTEXT_LENGTH:
+    from agent.model_metadata import get_minimum_context_length
+    if int(estimated_tokens or 0) < get_minimum_context_length():
         return
     try:
         check_compression_model_feasibility(agent)

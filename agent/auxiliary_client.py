@@ -117,7 +117,7 @@ def aux_probe_mode():
 
 
 from agent.credential_pool import load_pool
-from agent.model_metadata import MINIMUM_CONTEXT_LENGTH, get_model_context_length
+from agent.model_metadata import get_minimum_context_length, get_model_context_length
 from hermes_cli.config import get_hermes_home
 from hermes_cli.config_providers import _canonical_api_mode
 from agent.auxiliary_health import (
@@ -4359,7 +4359,7 @@ def _try_main_agent_model_fallback(
 # the well-known ones.
 def _task_minimum_context_length(task: Optional[str]) -> Optional[int]:
     """Minimum context length for an auxiliary task; None = no floor (only ``compression`` has one)."""
-    return MINIMUM_CONTEXT_LENGTH if task == "compression" else None
+    return get_minimum_context_length() if task == "compression" else None
 
 
 def _candidate_context_window(provider: str, model: str, base_url: str = "", api_key: str = "") -> Optional[int]:
