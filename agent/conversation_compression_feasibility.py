@@ -102,8 +102,8 @@ def ensure_compression_feasibility_checked(agent: Any, estimated_tokens: int) ->
         if probed is None or route == probed:
             return
         _drop_stale_ceiling(agent)
-    from agent.model_metadata import MINIMUM_CONTEXT_LENGTH
-    if int(estimated_tokens or 0) < MINIMUM_CONTEXT_LENGTH:
+    from agent.model_metadata import get_minimum_context_length
+    if int(estimated_tokens or 0) < get_minimum_context_length():
         return
     try:
         _probe(agent)

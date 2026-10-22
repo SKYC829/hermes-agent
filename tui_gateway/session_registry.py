@@ -403,7 +403,7 @@ def _new_session_key() -> str:
 # for materializing a row for a minted-but-never-persisted key: only keys the
 # server itself could have produced qualify — arbitrary strings and 8-hex
 # runtime session ids (``uuid4().hex[:8]``) are rejected.
-_MINTED_SESSION_KEY_RE = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{6}$")
+_MINTED_SESSION_KEY_RE = re.compile(r"^\d{8}_\d{6}_[0-9a-f]{6}(?:-[a-z0-9][a-z0-9_-]{0,63})?$")
 
 
 def _is_server_minted_key(value: str | None) -> bool:

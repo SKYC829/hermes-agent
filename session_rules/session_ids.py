@@ -15,6 +15,10 @@ from datetime import datetime
 from typing import Optional
 
 SESSION_ID_PATTERN = re.compile(r"^\d{8}_\d{6}_")
+# Optional profile tag suffix minted for named profiles: ``<minted_id>-<profile_name>``.
+# Fixed-width minted prefix keeps the timestamp parseable (system_prompt ``^`` anchor) and the
+# suffix unambiguous even though PROFILE_ID_RE allows hyphens inside profile names.
+PROFILE_TAG_SUFFIX_RE = re.compile(r"-(?P<tag>[a-z0-9][a-z0-9_-]{0,63})$")
 
 # Ids that surfaces derive instead of minting via new_session_id; salvage uses them as layout
 # sentinels, so anchor each on what its mint site fixes.
@@ -53,8 +57,29 @@ def is_known_session_id(value: str) -> bool:
 DEFAULT_HEX_LEN = 6
 
 
+def _active_profile_tag() -> str:
+    """Profile name suffix for ids minted inside a named profile, else ``""`` (default profile).
+
+    Lazy import keeps this module importable stdlib-only (the minting contract above);
+    hermes_constants is a leaf module, not the SessionDB graph. Tag only applies to named
+    profiles under ``<home>/profiles/<name>`` — the default profile's ids stay untouched.
+    """
+    try:
+        from hermes_constants import PROFILE_ID_RE, get_hermes_home
+        home = get_hermes_home()
+        if home.parent.name == "profiles" and home.name != "default" and PROFILE_ID_RE.match(home.name):
+            return home.name
+    except Exception:
+        pass
+    return ""
+
+
 def new_session_id(now: Optional[datetime] = None, *, hex_len: int = DEFAULT_HEX_LEN) -> str:
-    """``<timestamp>_<random hex>`` for a fresh session; ``now`` pins the timestamp to a clock the
-    caller already captured (``agent.session_start``) so the id and the row agree to the second."""
+    """``<timestamp>_<random hex>[-<profile>]`` for a fresh session; ``now`` pins the timestamp to a
+    clock the caller already captured (``agent.session_start``) so the id and the row agree to the
+    second. Named profiles append ``-<profile_name>`` so session keys are attributable at a glance
+    in cross-profile views (gateway registry, resume hints); the default profile mints bare ids."""
     stamp = (now or datetime.now()).strftime("%Y%m%d_%H%M%S")
-    return f"{stamp}_{uuid.uuid4().hex[:hex_len]}"
+    tag = _active_profile_tag()
+    suffix = f"-{tag}" if tag else ""
+    return f"{stamp}_{uuid.uuid4().hex[:hex_len]}{suffix}"

@@ -278,7 +278,23 @@ def _warn_context_length_fallback(model: str, base_url: str) -> None:
 
 
 # Sessions, model switches and cron jobs reject models below this (too little working memory).
-MINIMUM_CONTEXT_LENGTH = 64_000
+MINIMUM_CONTEXT_LENGTH = 64_000  # Default floor. Per-profile override: model.min_context_length
+
+
+def get_minimum_context_length() -> int:
+    """Working-memory floor for session models, overridable per profile via
+    `model.min_context_length` in the profile's config.yaml (default: MINIMUM_CONTEXT_LENGTH).
+    Read at gate time so the active profile's value applies; the main profile leaves the
+    default untouched."""
+    try:
+        from hermes_cli.config import load_config_readonly
+        cfg = load_config_readonly() or {}
+        val = int(((cfg.get("model") or {}).get("min_context_length")) or 0)
+        if val > 0:
+            return val
+    except Exception:
+        pass
+    return MINIMUM_CONTEXT_LENGTH
 # In-process (model, base_url) -> (result, monotonic_ts) memo for local probes: one
 # startup resolves the same model several times (banner, /model, compressor). Never persisted.
 _LOCAL_CTX_PROBE_TTL_SECONDS = 30.0
@@ -650,7 +666,7 @@ def _save_unless_skipped(model: str, base_url: str, ctx: int, provider: str) -> 
 def _maybe_cache_local_context_length(model: str, base_url: str, length: int) -> None:
     """Persist a probed local window only at/above MINIMUM_CONTEXT_LENGTH: sub-minimum windows are
     still returned so agent_init can reject them, but must not be blessed into the disk cache."""
-    if length >= MINIMUM_CONTEXT_LENGTH:
+    if length >= get_minimum_context_length():
         save_context_length(model, base_url, length)
 
 
@@ -671,12 +687,12 @@ def _reconcile_local_cached_context_length(model: str, base_url: str, cached: in
     live_ctx = _query_local_context_length(model, base_url, api_key=api_key)
     if not (live_ctx and live_ctx > 0 and live_ctx != cached):
         return cached
-    if live_ctx < MINIMUM_CONTEXT_LENGTH:
-        logger.info("Live local probe for %s@%s reports %s (< minimum %s); invalidating stale cache — agent init should reject", model, base_url, f"{live_ctx:,}", f"{MINIMUM_CONTEXT_LENGTH:,}")
+    if live_ctx < get_minimum_context_length():
+        logger.info("Live local probe for %s@%s reports %s (< minimum %s); invalidating stale cache — agent init should reject", model, base_url, f"{live_ctx:,}", f"{get_minimum_context_length():,}")
     else:
         logger.info("Reconciling stale local cache entry %s@%s: %s -> %s (live probe)", model, base_url, f"{cached:,}", f"{live_ctx:,}")
     _invalidate_cached_context_length(model, base_url)
-    if live_ctx >= MINIMUM_CONTEXT_LENGTH:
+    if live_ctx >= get_minimum_context_length():
         _maybe_cache_local_context_length(model, base_url, live_ctx)
     return live_ctx
 
