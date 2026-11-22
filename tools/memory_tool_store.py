@@ -847,20 +847,24 @@ class MemoryStore:
         except OSError as e:
             raise RuntimeError(f"Failed to write memory file {path}: {e}")
 
-    def _detect_external_drift(self, target: str, raw: str) -> Optional[str]:
-        """``.bak.<ts>`` snapshot path if *raw* shows external drift, else None. The one
-        signal is an entry over the whole-file limit: no tool-written entry can be, so it is
-        free-form text appended without delimiters, and replacing that "entry" would discard
-        it. Layout differences (blank lines around ``§``, empty entries, padding) are NOT
-        drift: parsing only strips whitespace, so the flush loses nothing but whitespace, and
-        refusing there blocked every replace/remove on a hand-formatted file for good (#107270)."""
-        # Obsidian files rebuild content on write — round-trip drift detection
-        # does not apply (the tool legitimately rewrites structure).
+    def _has_oversized_entry(self, target: str, raw: str) -> bool:
+        """True when one entry in *raw* is longer than the whole-file limit. A tool write
+        never produces one, so it is free-form text appended without delimiters, or an entry
+        written before the limit was lowered. Layout differences (blank lines around ``§``,
+        empty entries, padding) are NOT drift: parsing only strips whitespace, so the flush
+        loses nothing but whitespace, and refusing there blocked every replace/remove on a
+        hand-formatted file for good (#107270)."""
+        # Obsidian files rebuild content on write — drift detection does not apply
+        # (the tool legitimately rewrites structure).
         from tools import memory_tool  # lazy: avoid circular import
         if memory_tool._is_obsidian_file(self._path_for(target)):
-            return None
-        if max(map(len, self._parse_entries(raw)), default=0) <= self._char_limit(target):
-            return None
+            return False
+        return max(map(len, self._parse_entries(raw)), default=0) > self._char_limit(target)
+
+    def _drift_backup(self, target: str, raw: str) -> str:
+        """``.bak.<ts>[.<n>]`` snapshot of *raw* before a drift refusal or a delete that drops an
+        oversized entry. Created exclusively: two snapshots in the same second never overwrite
+        each other, since a later delete's snapshot no longer holds what an earlier one removed."""
         path = self._path_for(target)
         stem = path.suffix + f".bak.{int(time.time())}"
         for n in itertools.count():
